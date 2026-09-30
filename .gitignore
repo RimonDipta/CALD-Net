@@ -40,6 +40,7 @@ datasets/
 dataset/
 data/raw/
 data/processed/
+data/exdark/
 
 # ============================================================
 # Experiment outputs

@@ -1,89 +1,135 @@
+import torch
 from torch.utils.data import DataLoader
 
-from caldnet.data.synthetic import (
-    SyntheticDetectionDataset,
-)
-
-from caldnet.data.collate import (
-    detection_collate_fn,
-)
+from caldnet.data.exdark import ExDarkDataset
+from caldnet.data.collate import detection_collate_fn
 
 
 def main():
 
-    # ---------------------------------------------------------
-    # Dataset
-    # ---------------------------------------------------------
+    image_dir = "data/exdark/images"
+    annotation_dir = "data/exdark/annotations"
 
-    dataset = SyntheticDetectionDataset(
-        num_samples=10,
-        num_classes=3,
+    dataset = ExDarkDataset(
+        image_dir=image_dir,
+        annotation_dir=annotation_dir,
         image_size=640,
     )
 
-    # ---------------------------------------------------------
-    # DataLoader
-    # ---------------------------------------------------------
-
-    loader = DataLoader(
+    dataloader = DataLoader(
         dataset,
-        batch_size=2,
+        batch_size=4,
         shuffle=False,
+        num_workers=0,
         collate_fn=detection_collate_fn,
     )
 
-    # ---------------------------------------------------------
-    # Get first batch
-    # ---------------------------------------------------------
+    print(
+        "Dataset size:",
+        len(dataset),
+    )
+
+    print(
+        "Number of batches:",
+        len(dataloader),
+    )
 
     images, targets = next(
-        iter(loader)
+        iter(dataloader)
     )
 
-    # ---------------------------------------------------------
-    # Inspect batch
-    # ---------------------------------------------------------
-
-    print("Images:")
+    print()
     print(
-        "Shape:",
-        images.shape,
+        "Images:"
     )
 
     print(
-        "Dtype:",
+        "  Shape:",
+        tuple(images.shape),
+    )
+
+    print(
+        "  Dtype:",
         images.dtype,
     )
 
-    print("\nTargets:")
     print(
-        "Type:",
+        "  Min:",
+        float(images.min()),
+    )
+
+    print(
+        "  Max:",
+        float(images.max()),
+    )
+
+    print()
+    print(
+        "Targets:"
+    )
+
+    print(
+        "  Type:",
         type(targets),
     )
 
     print(
-        "Number of target tensors:",
+        "  Number of target tensors:",
         len(targets),
     )
 
-    # ---------------------------------------------------------
-    # Inspect individual targets
-    # ---------------------------------------------------------
-
-    for index, target in enumerate(targets):
+    for index, target in enumerate(
+        targets
+    ):
 
         print(
-            f"\nImage {index}:"
+            f"  Image {index}:",
+            tuple(target.shape),
         )
 
-        print(
-            "Target shape:",
-            target.shape,
-        )
+        if target.numel() > 0:
 
-        print(
-            target
-        )
+            print(
+                f"    Classes:",
+                sorted(
+                    set(
+                        target[:, 4]
+                        .long()
+                        .tolist()
+                    )
+                ),
+            )
+
+    assert images.shape == (
+        4,
+        3,
+        640,
+        640,
+    )
+
+    assert len(targets) == 4
+
+    for target in targets:
+
+        assert target.ndim == 2
+        assert target.shape[1] == 5
+
+        if target.numel() > 0:
+
+            coordinates = target[:, :4]
+
+            assert torch.all(
+                coordinates >= 0.0
+            )
+
+            assert torch.all(
+                coordinates <= 1.0
+            )
+
+    print()
+    print(
+        "[PASS] ExDark DataLoader test."
+    )
 
 
 if __name__ == "__main__":
