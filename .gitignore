@@ -41,6 +41,8 @@ dataset/
 data/raw/
 data/processed/
 data/exdark/
+!data/exdark/
+!data/exdark/imageclasslist.txt
 
 # ============================================================
 # Experiment outputs

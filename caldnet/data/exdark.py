@@ -10,6 +10,9 @@ class ExDarkDataset(Dataset):
     """
     ExDark object-detection dataset loader.
 
+    Supports the official ExDark experiment split defined by
+    imageclasslist.txt.
+
     Expected directory structure:
 
         data/exdark/
@@ -19,33 +22,32 @@ class ExDarkDataset(Dataset):
         │   ├── ...
         │   └── Table/
         │
-        └── annotations/
-            ├── Bicycle/
-            ├── Boat/
-            ├── ...
-            └── Table/
+        ├── annotations/
+        │   ├── Bicycle/
+        │   ├── Boat/
+        │   ├── ...
+        │   └── Table/
+        │
+        └── imageclasslist.txt
 
-    Image files:
-        .jpg
-        .jpeg
-        .png
+    Official imageclasslist.txt format:
 
-    Annotation files:
-        <image_name>.txt
+        Name | Class | Light | In/Out | Train/Val/Test
 
-    Example annotation:
+    Example:
 
-        % bbGt version=3
-        Cat 124 150 253 75 0 0 0 0 0 0 0
-        Chair 31 31 361 231 0 0 0 0 0 0 0
+        2015_00001.png 1 2 1 1
+        2015_00002.png 1 6 2 1
 
-    The first five meaningful fields are:
+    Split values:
 
-        class_name
-        left
-        top
-        width
-        height
+        1 = train
+        2 = val
+        3 = test
+
+    Image annotations use:
+
+        class_name left top width height ...
 
     Output target format:
 
@@ -74,10 +76,30 @@ class ExDarkDataset(Dataset):
         for class_id, class_name in enumerate(CLASS_NAMES)
     }
 
+    OFFICIAL_CLASS_TO_ID = {
+        class_id + 1: class_id
+        for class_id in range(len(CLASS_NAMES))
+    }
+
     IMAGE_EXTENSIONS = {
         ".jpg",
         ".jpeg",
         ".png",
+    }
+
+    SPLIT_TO_ID = {
+        "train": 1,
+        "val": 2,
+        "test": 3,
+    }
+
+    SPLIT_ALIASES = {
+        "training": "train",
+        "validation": "val",
+        "testing": "test",
+        "train": "train",
+        "val": "val",
+        "test": "test",
     }
 
     def __init__(
@@ -85,6 +107,8 @@ class ExDarkDataset(Dataset):
         image_dir,
         annotation_dir,
         image_size=640,
+        imageclasslist_path=None,
+        split=None,
     ):
         super().__init__()
 
@@ -104,53 +128,190 @@ class ExDarkDataset(Dataset):
                 f"{self.annotation_dir}"
             )
 
+        if split is not None:
+            split = self.SPLIT_ALIASES.get(
+                split.lower()
+            )
+
+            if split is None:
+                raise ValueError(
+                    "Invalid ExDark split. "
+                    "Expected one of: "
+                    "'train', 'val', 'test', "
+                    "'training', 'validation', 'testing'."
+                )
+
+            if imageclasslist_path is None:
+                raise ValueError(
+                    "imageclasslist_path is required "
+                    "when split is specified."
+                )
+
+        self.split = split
+
+        self.imageclasslist_path = (
+            Path(imageclasslist_path)
+            if imageclasslist_path is not None
+            else None
+        )
+
+        if self.imageclasslist_path is not None:
+            if not self.imageclasslist_path.exists():
+                raise FileNotFoundError(
+                    "ExDark imageclasslist.txt does not exist: "
+                    f"{self.imageclasslist_path}"
+                )
+
+        self.split_metadata = {}
+
+        if self.imageclasslist_path is not None:
+            self.split_metadata = (
+                self._parse_imageclasslist()
+            )
+
         self.samples = self._build_samples()
 
         if len(self.samples) == 0:
-            raise RuntimeError(
-                "No valid ExDark image/annotation pairs found."
-            )
-
-    def _build_samples(self):
-        """
-        Build image/annotation pairs.
-
-        The relative path of the annotation determines
-        the corresponding image.
-
-        Example:
-
-            annotations/Cat/2015_03042.jpg.txt
-
-        maps to:
-
-            images/Cat/2015_03042.jpg
-        """
-
-        samples = []
-
-        annotation_files = sorted(
-            self.annotation_dir.rglob("*.txt")
-        )
-
-        for annotation_path in annotation_files:
-
-            relative_annotation = (
-                annotation_path.relative_to(
-                    self.annotation_dir
+            if self.split is None:
+                raise RuntimeError(
+                    "No valid ExDark image/annotation pairs found."
                 )
+
+            raise RuntimeError(
+                "No valid ExDark image/annotation pairs "
+                f"found for split '{self.split}'."
             )
 
-            image_relative_path = Path(
-                str(relative_annotation)[:-4]
+    def _parse_imageclasslist(self):
+        """
+        Parse the official ExDark imageclasslist.txt.
+
+        Returns:
+
+            {
+                "filename.jpg": {
+                    "class_id": 0,
+                    "light_id": 1,
+                    "indoor_outdoor_id": 1,
+                    "split_id": 1,
+                }
+            }
+        """
+
+        metadata = {}
+
+        with self.imageclasslist_path.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            lines = file.readlines()
+
+        for line_number, raw_line in enumerate(
+            lines,
+            start=1,
+        ):
+
+            line = raw_line.strip()
+
+            if not line:
+                continue
+
+            if line.startswith("#"):
+                continue
+
+            if line.startswith("Name"):
+                continue
+
+            parts = line.split()
+
+            if len(parts) < 5:
+                continue
+
+            image_name = parts[0]
+
+            try:
+                class_id = int(parts[1])
+                light_id = int(parts[2])
+                indoor_outdoor_id = int(parts[3])
+                split_id = int(parts[4])
+            except ValueError as error:
+                raise ValueError(
+                    "Invalid ExDark imageclasslist entry "
+                    f"at line {line_number}: {line}"
+                ) from error
+
+            if class_id not in self.OFFICIAL_CLASS_TO_ID:
+                raise ValueError(
+                    "Invalid ExDark class ID "
+                    f"{class_id} at line {line_number}."
+                )
+
+            if light_id < 1 or light_id > 10:
+                raise ValueError(
+                    "Invalid ExDark lighting ID "
+                    f"{light_id} at line {line_number}."
+                )
+
+            if indoor_outdoor_id not in {1, 2}:
+                raise ValueError(
+                    "Invalid ExDark indoor/outdoor ID "
+                    f"{indoor_outdoor_id} at line {line_number}."
+                )
+
+            if split_id not in {1, 2, 3}:
+                raise ValueError(
+                    "Invalid ExDark split ID "
+                    f"{split_id} at line {line_number}."
+                )
+
+            key = image_name.lower()
+
+            if key in metadata:
+                raise ValueError(
+                    "Duplicate image name in "
+                    "imageclasslist.txt: "
+                    f"{image_name}"
+                )
+
+            metadata[key] = {
+                "image_name": image_name,
+                "class_id": (
+                    self.OFFICIAL_CLASS_TO_ID[class_id]
+                ),
+                "light_id": light_id,
+                "indoor_outdoor_id": indoor_outdoor_id,
+                "split_id": split_id,
+            }
+
+        if len(metadata) == 0:
+            raise RuntimeError(
+                "No valid entries found in "
+                f"{self.imageclasslist_path}"
             )
 
-            image_path = (
-                self.image_dir
-                / image_relative_path
-            )
+        return metadata
 
-            if not image_path.exists():
+    def _build_image_index(self):
+        """
+        Build a case-insensitive image filename index.
+
+        Returns:
+
+            {
+                "2015_00001.jpg": Path(...),
+                ...
+            }
+
+        The image filename must be unique across the local
+        ExDark image directory.
+        """
+
+        image_index = {}
+
+        for image_path in self.image_dir.rglob("*"):
+
+            if not image_path.is_file():
                 continue
 
             if (
@@ -159,10 +320,132 @@ class ExDarkDataset(Dataset):
             ):
                 continue
 
+            key = image_path.name.lower()
+
+            if key in image_index:
+                raise RuntimeError(
+                    "Duplicate image filename found in "
+                    "ExDark image directory: "
+                    f"{image_path.name}\n"
+                    f"Existing path: {image_index[key]}\n"
+                    f"Duplicate path: {image_path}"
+                )
+
+            image_index[key] = image_path
+
+        return image_index
+
+    def _build_samples(self):
+        """
+        Build image/annotation pairs.
+
+        Without a split:
+
+            All local image/annotation pairs are returned.
+
+        With a split:
+
+            Only images listed in the official
+            imageclasslist.txt for that split are returned.
+        """
+
+        image_index = self._build_image_index()
+
+        samples = []
+
+        annotation_files = sorted(
+            self.annotation_dir.rglob("*.txt")
+        )
+
+        annotation_index = {}
+
+        for annotation_path in annotation_files:
+
+            key = annotation_path.stem.lower()
+
+            if key in annotation_index:
+                raise RuntimeError(
+                    "Duplicate annotation filename found: "
+                    f"{annotation_path.stem}"
+                )
+
+            annotation_index[key] = annotation_path
+
+        for image_key, image_path in sorted(
+            image_index.items()
+        ):
+
+            annotation_key = image_path.name.lower()
+
+            annotation_path = annotation_index.get(
+                annotation_key
+            )
+
+            if annotation_path is None:
+
+                annotation_key = (
+                    image_path.stem.lower()
+                )
+
+                annotation_path = annotation_index.get(
+                    annotation_key
+                )
+
+            if annotation_path is None:
+                continue
+
+            metadata = self.split_metadata.get(
+                image_key
+            )
+
+            if self.split is not None:
+
+                if metadata is None:
+                    continue
+
+                expected_split_id = self.SPLIT_TO_ID[
+                    self.split
+                ]
+
+                if metadata["split_id"] != (
+                    expected_split_id
+                ):
+                    continue
+
+                expected_class_id = metadata[
+                    "class_id"
+                ]
+
+                folder_name = (
+                    image_path.parent.name
+                )
+
+                if folder_name in self.CLASS_TO_ID:
+
+                    actual_folder_class_id = (
+                        self.CLASS_TO_ID[
+                            folder_name
+                        ]
+                    )
+
+                    if (
+                        actual_folder_class_id
+                        != expected_class_id
+                    ):
+                        raise RuntimeError(
+                            "ExDark class mismatch for "
+                            f"{image_path.name}: "
+                            f"imageclasslist class="
+                            f"{self.CLASS_NAMES[expected_class_id]}, "
+                            f"folder class="
+                            f"{folder_name}"
+                        )
+
             samples.append(
                 {
                     "image_path": image_path,
                     "annotation_path": annotation_path,
+                    "metadata": metadata,
                 }
             )
 
